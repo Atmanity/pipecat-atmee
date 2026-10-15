@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # `uv run` would otherwise re-resolve the project and replace the pinned
+      # pipecat-ai of the matrix with the latest release.
+      UV_NO_SYNC: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+        pipecat: ["==1.8.0", ">=1.8,<2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          uv venv
+          uv pip install -e . --group dev "pipecat-ai${{ matrix.pipecat }}"
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Types
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest -q
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

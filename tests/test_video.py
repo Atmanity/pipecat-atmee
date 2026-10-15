@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from livekit import api as lk_api
+from pipecat.frames.frames import (
+    InterruptionFrame,
+    TTSAudioRawFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
+)
+from pipecat.tests.utils import SleepFrame, run_test
+
+from pipecat_atmee import AtmeeException, AtmeeVideoService
+
+
+class FakeSender:
+    def __init__(self) -> None:
+        self.audio = bytearray()
+        self.calls: list[str] = []
+        self.speaking = False
+
+    async def write(self, pcm: bytes) -> None:
+        self.audio += pcm
+        self.speaking = True
+        self.calls.append("write")
+
+    async def flush(self) -> None:
+        self.speaking = False
+        self.calls.append("flush")
+
+    async def clear(self) -> None:
+        self.speaking = False
+        self.calls.append("clear")
+
+    def unregister_rpc_methods(self) -> None:
+        self.calls.append("unregister")
+
+
+class FakeAPI:
+    def __init__(self, fail_first_end: Exception | None = None) -> None:
+        self.ended: list[str] = []
+        self._fail = fail_first_end
+
+    async def end_avatar_session(self, session_id: str) -> dict[str, Any]:
+        if self._fail is not None:
+            err, self._fail = self._fail, None
+            raise err
+        self.ended.append(session_id)
+        return {}
+
+    async def aclose(self) -> None:
+        pass
+
+
+class Harness(AtmeeVideoService):
+    """The service with its room and API replaced by fakes."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(avatar_id="a-1", api_key="sk_atmee_test", **kwargs)
+        self.fake_sender = FakeSender()
+        self.fake_api = FakeAPI()
+        self._api = self.fake_api  # type: ignore[assignment]
+
+    async def _start_session(self) -> None:
+        self.session_id = "s-1"
+        self._sender = self.fake_sender  # type: ignore[assignment]
+        self._avatar_ready.set()
+
+
+def tts_audio(ms: int = 20, rate: int = 24000) -> TTSAudioRawFrame:
+    return TTSAudioRawFrame(
+        audio=b"\x10\x00" * (rate * ms // 1000), sample_rate=rate, num_channels=1
+    )
+
+
+async def test_tts_audio_goes_to_the_avatar_not_downstream():
+    svc = Harness()
+    down, _ = await run_test(
+        svc,
+        frames_to_send=[TTSStartedFrame(), *[tts_audio() for _ in range(25)], TTSStoppedFrame()],
+        expected_down_frames=[TTSStartedFrame, TTSStoppedFrame],
+    )
+    # resampled 24 kHz -> 16 kHz, 16-bit mono: ~0.5 s of audio
+    assert abs(len(svc.fake_sender.audio) / 32000 - 0.5) < 0.05
+    assert svc.fake_sender.calls[-2:] == ["flush", "unregister"]
+    assert svc.fake_api.ended == ["s-1"]
+
+
+async def test_interruption_clears_a_speaking_avatar():
+    svc = Harness()
+    await run_test(
+        svc,
+        frames_to_send=[TTSStartedFrame(), tts_audio(), SleepFrame(0.1), InterruptionFrame()],
+    )
+    assert "clear" in svc.fake_sender.calls
+
+
+async def test_interruption_of_an_idle_avatar_sends_nothing():
+    svc = Harness()
+    await run_test(svc, frames_to_send=[InterruptionFrame()])
+    assert "clear" not in svc.fake_sender.calls
+
+
+async def test_failed_end_is_retried_by_a_later_teardown():
+    svc = Harness()
+    svc.fake_api = FakeAPI(fail_first_end=AtmeeException("down", status_code=502))
+    svc._api = svc.fake_api  # type: ignore[assignment]
+    await run_test(svc, frames_to_send=[])
+    # stop() failed to end the session; cleanup() tried again and succeeded
+    assert svc.fake_api.ended == ["s-1"]
+    await svc._end_session()
+    assert svc.fake_api.ended == ["s-1"]  # once confirmed, never again
+
+
+async def test_unknown_session_end_is_not_retried():
+    svc = Harness()
+    svc.fake_api = FakeAPI(fail_first_end=AtmeeException("gone", status_code=404))
+    svc._api = svc.fake_api  # type: ignore[assignment]
+    await run_test(svc, frames_to_send=[])
+    await svc._end_session()
+    assert svc.fake_api.ended == []
+
+
+def test_byo_tokens():
+    svc = AtmeeVideoService(
+        avatar_id="a-1",
+        api_key="sk_atmee_test",
+        livekit_url="wss://mine.example",
+        livekit_api_key="APIkey",
+        livekit_api_secret="s" * 32,
+        agent_identity="my-bot",
+    )
+    verifier = lk_api.TokenVerifier("APIkey", "s" * 32)
+    avatar = verifier.verify(svc._mint_avatar_token("room-1"))
+    assert avatar.identity == "atmee-avatar-agent"
+    assert avatar.video.room == "room-1" and avatar.video.room_join
+    assert avatar.attributes == {"lk.publish_on_behalf": "my-bot"}
+    agent = verifier.verify(svc._mint_token("room-1", "my-bot"))
+    assert agent.identity == "my-bot" and agent.video.room == "room-1"
+
+
+def test_byo_needs_all_three():
+    with pytest.raises(AtmeeException):
+        AtmeeVideoService(avatar_id="a-1", api_key="k", livekit_url="wss://x")

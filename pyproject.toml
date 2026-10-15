@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pipecat-atmee"
+dynamic = ["version"]
+description = "Atmee avatars for Pipecat: give your bot a talking-head face generated from a single portrait"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "Atmanity", email = "hello@atmee.ai" }]
+keywords = ["pipecat", "avatar", "video", "webrtc", "realtime", "atmee", "talking-head"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "pipecat-ai>=1.8,<2",
+    "livekit>=1.0.13,<2",
+    "livekit-api>=1.0.5,<2",
+    "aiohttp>=3.9",
+    "numpy>=1.26",
+]
+
+[project.urls]
+Documentation = "https://github.com/Atmanity/pipecat-atmee#readme"
+Website = "https://atmee.ai"
+Source = "https://github.com/Atmanity/pipecat-atmee"
+Changelog = "https://github.com/Atmanity/pipecat-atmee/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.11",
+    "mypy>=1.13",
+]
+# What the runnable examples need on top of the package itself.
+examples = [
+    "pipecat-ai[deepgram,openai,silero,webrtc,daily,runner]>=1.8,<2",
+    "python-dotenv>=1",
+]
+
+[tool.uv]
+default-groups = ["dev", "examples"]
+
+[tool.hatch.version]
+path = "pipecat_atmee/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pipecat_atmee"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/pipecat_atmee", "/README.md", "/LICENSE", "/CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pipecat_atmee"]
+
+[tool.mypy]
+packages = ["pipecat_atmee"]
+ignore_missing_imports = true
+check_untyped_defs = true

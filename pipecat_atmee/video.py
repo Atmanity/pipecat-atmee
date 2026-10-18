@@ -55,6 +55,7 @@ from pipecat_atmee._datastream import DataStreamAudioSender
 from pipecat_atmee.api import (
     DEFAULT_CONNECT_OPTIONS,
     AtmeeAPI,
+    AtmeeAvatarWarmingError,
     AtmeeException,
     AtmeeHostedRoomMissingError,
     AvatarSessionInfo,
@@ -73,7 +74,13 @@ DEFAULT_AVATAR_IDENTITY = "atmee-avatar-agent"
 DEFAULT_AGENT_IDENTITY = "pipecat-agent"
 DEFAULT_MAX_DURATION_SECONDS = 3600
 # How long the first bot audio waits for the avatar to be in the room.
-DEFAULT_AVATAR_JOIN_TIMEOUT = 120.0
+# Covers a v2 avatar on a cold rendering machine, which takes a few minutes.
+DEFAULT_AVATAR_JOIN_TIMEOUT = 330.0
+# How long the start keeps retrying while a v2 avatar is being prepared on a
+# rendering machine (503 avatar_warming), and the pause when the API sends no
+# Retry-After.
+DEFAULT_AVATAR_WARMUP_TIMEOUT = 300.0
+_WARMING_RETRY_SECONDS = 30.0
 # The avatar's token outlives the session ceiling by this much.
 _TOKEN_TTL_SLACK = timedelta(minutes=10)
 # After an interruption the avatar's audio already on the wire (its playout
@@ -98,6 +105,10 @@ class AtmeeVideoService(AIService):
     audio as ``SpeechOutputAudioRawFrame`` downstream to the transport.
     Interruptions stop the avatar mid-sentence. The session ends, and stops
     billing, when the pipeline ends or is cancelled.
+
+    Any avatar of your account works, v1 or v2. A v2 avatar on a cold
+    rendering machine can take a few minutes to start: the service waits
+    (``avatar_warmup_timeout``, ``avatar_join_timeout``) instead of failing.
 
     By default Atmee hosts the media room the avatar is rendered into; only an
     Atmee API key is needed. Pass ``livekit_url``/``livekit_api_key``/
@@ -132,6 +143,7 @@ class AtmeeVideoService(AIService):
         livekit_api_secret: str | None = None,
         livekit_room_name: str | None = None,
         avatar_join_timeout: float = DEFAULT_AVATAR_JOIN_TIMEOUT,
+        avatar_warmup_timeout: float = DEFAULT_AVATAR_WARMUP_TIMEOUT,
         conn_options: ConnectOptions = DEFAULT_CONNECT_OPTIONS,
         settings: AtmeeVideoSettings | None = None,
         **kwargs: Any,
@@ -157,6 +169,8 @@ class AtmeeVideoService(AIService):
             livekit_room_name: Room name in your LiveKit project; random by default.
             avatar_join_timeout: How long the first bot speech waits for the
                 avatar to be ready before it is dropped with an error.
+            avatar_warmup_timeout: How long the start keeps retrying while a
+                v2 avatar is being prepared on a rendering machine.
             conn_options: Retry/timeout policy of the API client.
             settings: Runtime-updatable settings.
             **kwargs: Additional arguments passed to ``AIService``.
@@ -185,6 +199,7 @@ class AtmeeVideoService(AIService):
         self._lk_secret = livekit_api_secret
         self._lk_room_name = livekit_room_name
         self._avatar_join_timeout = avatar_join_timeout
+        self._avatar_warmup_timeout = avatar_warmup_timeout
 
         self.session_id: str | None = None
         """The Atmee avatar session id once the pipeline started."""
@@ -295,8 +310,7 @@ class AtmeeVideoService(AIService):
         if self._lk_url:
             room_name = self._lk_room_name or f"atmee-pipecat-{secrets.token_hex(6)}"
             await self._connect(self._lk_url, self._mint_token(room_name, self._agent_identity))
-            info = await self._api.create_avatar_session(
-                self._avatar_id,
+            info = await self._create_session(
                 livekit_url=self._lk_url,
                 livekit_token=self._mint_avatar_token(room_name),
                 agent_identity=self._agent_identity,
@@ -306,8 +320,7 @@ class AtmeeVideoService(AIService):
             self._remember(info)
         else:
             try:
-                info = await self._api.create_avatar_session(
-                    self._avatar_id,
+                info = await self._create_session(
                     agent_identity=self._agent_identity,
                     max_duration_seconds=self._max_duration_seconds,
                     metadata=self._metadata,
@@ -325,6 +338,24 @@ class AtmeeVideoService(AIService):
             f"(billing {info.billing_mode}, ceiling {info.max_duration_seconds}s)"
         )
         self._check_avatar_present()
+
+    async def _create_session(self, **kwargs: Any) -> AvatarSessionInfo:
+        """Start the session, retrying while a v2 avatar is still warming up.
+
+        A 503 ``avatar_warming`` rendered and billed nothing, so starting
+        again is safe.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._avatar_warmup_timeout
+        while True:
+            try:
+                return await self._api.create_avatar_session(self._avatar_id, **kwargs)
+            except AtmeeAvatarWarmingError as e:
+                pause = e.retry_after if e.retry_after is not None else _WARMING_RETRY_SECONDS
+                if self._closing or loop.time() + pause > deadline:
+                    raise
+                logger.info(f"{self}: the Atmee avatar is warming up; retrying in {pause:.0f}s")
+                await asyncio.sleep(pause)
 
     def _remember(self, info: AvatarSessionInfo) -> None:
         self.session_info = info

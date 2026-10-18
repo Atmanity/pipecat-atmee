@@ -5,6 +5,7 @@ import pytest
 from pipecat_atmee import (
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
+    AtmeeAvatarWarmingError,
     AtmeeException,
     AtmeeHostedRoomMissingError,
     AtmeeNoCapacityError,
@@ -88,6 +89,16 @@ async def test_no_capacity_is_typed_and_final(fake_api):
         with pytest.raises(AtmeeNoCapacityError) as err:
             await client.create_avatar_session(AVATAR)
     assert err.value.retry_after == 5.0
+
+
+async def test_avatar_warming_is_typed_and_final(fake_api):
+    fake_api.respond(START, (503, {"error": "avatar_warming", "message": "preparing"}))
+    async with api(fake_api) as client:
+        with pytest.raises(AtmeeAvatarWarmingError) as err:
+            await client.create_avatar_session(AVATAR)
+    assert err.value.code == "avatar_warming"
+    assert err.value.retry_after == 5.0
+    assert len(fake_api.calls(START)) == 1
 
 
 async def test_not_renderable_is_typed(fake_api):

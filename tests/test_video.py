@@ -12,7 +12,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.tests.utils import SleepFrame, run_test
 
-from pipecat_atmee import AtmeeException, AtmeeVideoService
+from pipecat_atmee import AtmeeAvatarWarmingError, AtmeeException, AtmeeVideoService
 
 
 class FakeSender:
@@ -144,3 +144,35 @@ def test_byo_tokens():
 def test_byo_needs_all_three():
     with pytest.raises(AtmeeException):
         AtmeeVideoService(avatar_id="a-1", api_key="k", livekit_url="wss://x")
+
+
+class WarmingAPI(FakeAPI):
+    """Answers avatar_warming ``warm_for`` times, then starts the session."""
+
+    def __init__(self, warm_for: int) -> None:
+        super().__init__()
+        self.starts = 0
+        self._warm_for = warm_for
+
+    async def create_avatar_session(self, avatar_id: str, **kwargs: Any) -> str:
+        self.starts += 1
+        if self.starts <= self._warm_for:
+            raise AtmeeAvatarWarmingError("preparing", retry_after=0.01)
+        return "info"
+
+
+async def test_start_retries_while_the_avatar_warms_up():
+    service = AtmeeVideoService(avatar_id="a-1", api_key="sk_atmee_test")
+    service._api = WarmingAPI(warm_for=2)  # type: ignore[assignment]
+    assert await service._create_session(agent_identity="bot") == "info"
+    assert service._api.starts == 3
+
+
+async def test_warming_retries_stop_at_the_warmup_timeout():
+    service = AtmeeVideoService(
+        avatar_id="a-1", api_key="sk_atmee_test", avatar_warmup_timeout=0.015
+    )
+    service._api = WarmingAPI(warm_for=100)  # type: ignore[assignment]
+    with pytest.raises(AtmeeAvatarWarmingError):
+        await service._create_session(agent_identity="bot")
+    assert service._api.starts == 2

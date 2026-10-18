@@ -14,14 +14,14 @@
 
 """Atmee avatars for Pipecat: give your bot a face.
 
-``AtmeeVideoService`` renders an Atmee v1 avatar (a talking head generated
-from a single portrait) lip-synced to your bot's TTS, and ``AtmeeAPI``
-creates avatars from a portrait.
+``AtmeeVideoService`` renders an Atmee avatar (v1 or v2) lip-synced to your
+bot's TTS, and ``AtmeeAPI`` creates v1 avatars from a single portrait.
 """
 
 from pipecat_atmee.api import (
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
+    AtmeeAvatarWarmingError,
     AtmeeException,
     AtmeeHostedRoomMissingError,
     AtmeeNoCapacityError,
@@ -35,6 +35,7 @@ from pipecat_atmee.video import AtmeeVideoService, AtmeeVideoSettings
 __all__ = [
     "AtmeeAPI",
     "AtmeeAvatarNotReadyError",
+    "AtmeeAvatarWarmingError",
     "AtmeeException",
     "AtmeeHostedRoomMissingError",
     "AtmeeNoCapacityError",

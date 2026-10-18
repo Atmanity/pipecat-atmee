@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "pipecat-atmee"
 dynamic = ["version"]
-description = "Atmee avatars for Pipecat: give your bot a talking-head face generated from a single portrait"
+description = "Atmee avatars for Pipecat: give your bot a lip-synced talking-head face"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"

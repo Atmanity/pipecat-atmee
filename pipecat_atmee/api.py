@@ -14,9 +14,9 @@
 
 """Thin async client for the Atmee API.
 
-Two resources matter here: **avatars** — Atmee v1 avatars, talking heads
-generated from a single portrait — (create one from a portrait, read its
-status) and **avatar sessions** (render an avatar for your bot, end it).
+Two resources matter here: **avatars** (create a v1 avatar from a portrait,
+read an avatar's status) and **avatar sessions** (render a v1 or v2 avatar
+for your bot, end it).
 Authentication is your Atmee API key (``sk_atmee_...``) in the ``X-Api-Key``
 header; keep it on your bot's side, it never belongs in a browser.
 """
@@ -38,10 +38,10 @@ DEFAULT_API_URL = "https://api.atmanity.us"
 
 WaitFor = Literal["initializing", "avatar_joined"]
 
-# Overall budget of the start call: the renderer acknowledges within seconds,
-# but waiting for the avatar to join also covers model priming on a cold
-# machine plus the room join.
-_START_TOTAL_TIMEOUT: dict[str, float] = {"initializing": 60.0, "avatar_joined": 180.0}
+# Overall budget of the start call. A warm renderer acknowledges within
+# seconds; a v2 avatar on a cold rendering machine can take a few minutes to
+# acknowledge, and waiting for the avatar to join adds the room join.
+_START_TOTAL_TIMEOUT: dict[str, float] = {"initializing": 300.0, "avatar_joined": 360.0}
 _DEFAULT_TOTAL_TIMEOUT = 120.0
 # Ending a session runs on pipeline stop/cancel: bound each attempt and the
 # whole call (retries included) so teardown cannot hang for minutes.
@@ -102,6 +102,18 @@ class AtmeeNoCapacityError(AtmeeException):
 
     def __init__(self, message: str, *, retry_after: float | None = None) -> None:
         super().__init__(message, status_code=503, code="no_capacity")
+        self.retry_after = retry_after
+
+
+class AtmeeAvatarWarmingError(AtmeeException):
+    """A v2 avatar is still being prepared on a rendering machine (HTTP 503
+    ``avatar_warming``). Nothing was rendered or billed; starting again after
+    ``retry_after`` seconds succeeds. :class:`AtmeeVideoService` does that on
+    its own.
+    """
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message, status_code=503, code="avatar_warming")
         self.retry_after = retry_after
 
 
@@ -166,7 +178,8 @@ class AtmeeAPI:
         api_key: Your ``sk_atmee_...`` key; defaults to ``ATMEE_API_KEY``.
         api_url: API base; defaults to ``ATMEE_API_URL`` or ``https://api.atmanity.us``.
         conn_options: Retry/timeout policy for transport failures and 5xx
-            answers (a 503 ``no_capacity`` is never retried).
+            answers (a 503 ``no_capacity`` or ``avatar_warming`` is never
+            retried by the client itself).
         session: An ``aiohttp.ClientSession`` to reuse. Without one a private
             session is created on first use and closed by :meth:`aclose`.
     """
@@ -431,7 +444,9 @@ class AtmeeAPI:
                         return payload if isinstance(payload, dict) else {"data": payload}
                     raise await _error_from_response(response)
             except AtmeeException as e:
-                if e.status_code >= 500 and not isinstance(e, AtmeeNoCapacityError):
+                if e.status_code >= 500 and not isinstance(
+                    e, (AtmeeNoCapacityError, AtmeeAvatarWarmingError)
+                ):
                     last_error = e
                 else:
                     raise
@@ -493,7 +508,7 @@ async def _error_from_response(response: aiohttp.ClientResponse) -> AtmeeExcepti
         message = str(body.get("message") or body.get("detail") or message)
     # Only the API's own no_capacity answer is final; a bare 503 (a gateway or
     # load balancer) is transient and retried like any other 5xx.
-    if response.status == 503 and code == "no_capacity":
+    if response.status == 503 and code in ("no_capacity", "avatar_warming"):
         retry_after: float | None = None
         header = response.headers.get("Retry-After")
         if header:
@@ -501,6 +516,8 @@ async def _error_from_response(response: aiohttp.ClientResponse) -> AtmeeExcepti
                 retry_after = float(header)
             except ValueError:
                 retry_after = None
+        if code == "avatar_warming":
+            return AtmeeAvatarWarmingError(message, retry_after=retry_after)
         return AtmeeNoCapacityError(message, retry_after=retry_after)
     if response.status == 409 and code == "avatar_not_renderable":
         return AtmeeAvatarNotReadyError(message, status_code=409, code=code)

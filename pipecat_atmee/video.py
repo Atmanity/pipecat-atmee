@@ -55,6 +55,7 @@ from pipecat_atmee._datastream import DataStreamAudioSender
 from pipecat_atmee.api import (
     DEFAULT_CONNECT_OPTIONS,
     AtmeeAPI,
+    AtmeeAvatarWarmingError,
     AtmeeException,
     AtmeeHostedRoomMissingError,
     AvatarSessionInfo,
@@ -73,7 +74,22 @@ DEFAULT_AVATAR_IDENTITY = "atmee-avatar-agent"
 DEFAULT_AGENT_IDENTITY = "pipecat-agent"
 DEFAULT_MAX_DURATION_SECONDS = 3600
 # How long the first bot audio waits for the avatar to be in the room.
-DEFAULT_AVATAR_JOIN_TIMEOUT = 120.0
+# Covers a v2 avatar on a cold rendering machine, which takes a few minutes.
+DEFAULT_AVATAR_JOIN_TIMEOUT = 330.0
+# How long the start keeps retrying while a v2 avatar is being prepared on a
+# rendering machine (503 avatar_warming), and the pause when the API sends no
+# Retry-After.
+DEFAULT_AVATAR_WARMUP_TIMEOUT = 300.0
+_WARMING_RETRY_SECONDS = 30.0
+# On stop/cancel, a start still waiting for the API gets this long to return
+# the session it created (so it can be ended) before it is cancelled.
+_START_ABORT_GRACE_SECONDS = 15.0
+
+
+class _StartAborted(Exception):
+    """The pipeline stopped while the avatar session was still starting."""
+
+
 # The avatar's token outlives the session ceiling by this much.
 _TOKEN_TTL_SLACK = timedelta(minutes=10)
 # After an interruption the avatar's audio already on the wire (its playout
@@ -98,6 +114,10 @@ class AtmeeVideoService(AIService):
     audio as ``SpeechOutputAudioRawFrame`` downstream to the transport.
     Interruptions stop the avatar mid-sentence. The session ends, and stops
     billing, when the pipeline ends or is cancelled.
+
+    Any avatar of your account works, v1 or v2. A v2 avatar on a cold
+    rendering machine can take a few minutes to start: the service waits
+    (``avatar_warmup_timeout``, ``avatar_join_timeout``) instead of failing.
 
     By default Atmee hosts the media room the avatar is rendered into; only an
     Atmee API key is needed. Pass ``livekit_url``/``livekit_api_key``/
@@ -132,6 +152,7 @@ class AtmeeVideoService(AIService):
         livekit_api_secret: str | None = None,
         livekit_room_name: str | None = None,
         avatar_join_timeout: float = DEFAULT_AVATAR_JOIN_TIMEOUT,
+        avatar_warmup_timeout: float = DEFAULT_AVATAR_WARMUP_TIMEOUT,
         conn_options: ConnectOptions = DEFAULT_CONNECT_OPTIONS,
         settings: AtmeeVideoSettings | None = None,
         **kwargs: Any,
@@ -155,8 +176,11 @@ class AtmeeVideoService(AIService):
             livekit_api_secret: Your LiveKit API secret (bring-your-own-LiveKit).
                 It never leaves your process: the avatar's token is minted locally.
             livekit_room_name: Room name in your LiveKit project; random by default.
-            avatar_join_timeout: How long the first bot speech waits for the
-                avatar to be ready before it is dropped with an error.
+            avatar_join_timeout: How long the first bot speech waits, once the
+                session has started, for the avatar's video before it is
+                dropped with an error.
+            avatar_warmup_timeout: How long the start keeps retrying while a
+                v2 avatar is being prepared on a rendering machine.
             conn_options: Retry/timeout policy of the API client.
             settings: Runtime-updatable settings.
             **kwargs: Additional arguments passed to ``AIService``.
@@ -185,6 +209,7 @@ class AtmeeVideoService(AIService):
         self._lk_secret = livekit_api_secret
         self._lk_room_name = livekit_room_name
         self._avatar_join_timeout = avatar_join_timeout
+        self._avatar_warmup_timeout = avatar_warmup_timeout
 
         self.session_id: str | None = None
         """The Atmee avatar session id once the pipeline started."""
@@ -204,8 +229,13 @@ class AtmeeVideoService(AIService):
         self._video_task: asyncio.Task | None = None
         self._audio_task: asyncio.Task | None = None
         self._started = False
+        self._start_task: asyncio.Task | None = None
+        # Set once the background start finished, successfully or not.
+        self._start_done: asyncio.Event = asyncio.Event()
         self._ended = False
         self._closing = False
+        # Set together with _closing: wakes waits that must end on shutdown.
+        self._closed: asyncio.Event = asyncio.Event()
         self._teardown_lock = asyncio.Lock()
         self._end_lock = asyncio.Lock()
         # True from the first audio of an utterance until the avatar reports
@@ -250,6 +280,10 @@ class AtmeeVideoService(AIService):
     async def start(self, frame: StartFrame):
         """Start the avatar session and join its media room.
 
+        The session starts in the background: a v2 avatar on a cold rendering
+        machine takes minutes, far longer than the pipeline waits for its
+        ``StartFrame``. Bot speech waits for the avatar (``avatar_join_timeout``).
+
         Args:
             frame: The start frame.
         """
@@ -257,15 +291,24 @@ class AtmeeVideoService(AIService):
         if self._started:
             return
         self._started = True
+        self._start_task = self.create_task(self._run_start(), "atmee_start")
+
+    async def _run_start(self) -> None:
         try:
             await self._start_session()
+        except _StartAborted:
+            pass
         except Exception as e:
+            if self._closing:
+                return  # the pipeline is stopping anyway; its teardown ends the session
             await self._teardown()
             await self.push_error(
                 f"Atmee avatar session failed to start: {e}",
                 exception=e,
                 force_treat_as_permanent=True,
             )
+        finally:
+            self._start_done.set()
 
     async def stop(self, frame: EndFrame):
         """End the avatar session gracefully.
@@ -295,8 +338,7 @@ class AtmeeVideoService(AIService):
         if self._lk_url:
             room_name = self._lk_room_name or f"atmee-pipecat-{secrets.token_hex(6)}"
             await self._connect(self._lk_url, self._mint_token(room_name, self._agent_identity))
-            info = await self._api.create_avatar_session(
-                self._avatar_id,
+            info = await self._create_session(
                 livekit_url=self._lk_url,
                 livekit_token=self._mint_avatar_token(room_name),
                 agent_identity=self._agent_identity,
@@ -304,10 +346,10 @@ class AtmeeVideoService(AIService):
                 metadata=self._metadata,
             )
             self._remember(info)
+            await self._end_if_closing()
         else:
             try:
-                info = await self._api.create_avatar_session(
-                    self._avatar_id,
+                info = await self._create_session(
                     agent_identity=self._agent_identity,
                     max_duration_seconds=self._max_duration_seconds,
                     metadata=self._metadata,
@@ -316,6 +358,7 @@ class AtmeeVideoService(AIService):
                 self._remember(e.info)
                 raise
             self._remember(info)
+            await self._end_if_closing()
             if info.avatar_participant_identity:
                 self._avatar_identity = info.avatar_participant_identity
             assert info.livekit_url and info.agent_token
@@ -325,6 +368,49 @@ class AtmeeVideoService(AIService):
             f"(billing {info.billing_mode}, ceiling {info.max_duration_seconds}s)"
         )
         self._check_avatar_present()
+
+    async def _create_session(self, **kwargs: Any) -> AvatarSessionInfo:
+        """Start the session, retrying while a v2 avatar is still warming up.
+
+        A 503 ``avatar_warming`` rendered and billed nothing, so starting
+        again is safe.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._avatar_warmup_timeout
+        while True:
+            try:
+                return await self._api.create_avatar_session(self._avatar_id, **kwargs)
+            except AtmeeAvatarWarmingError as e:
+                pause = e.retry_after if e.retry_after is not None else _WARMING_RETRY_SECONDS
+                if self._closing:
+                    raise _StartAborted() from e
+                if loop.time() + pause > deadline:
+                    raise
+                logger.info(f"{self}: the Atmee avatar is warming up; retrying in {pause:.0f}s")
+                if await self._wait_or_closed(self._closed, pause):
+                    raise _StartAborted() from e
+
+    async def _end_if_closing(self) -> None:
+        """The pipeline stopped while the start call was in flight: end the
+        session it created instead of joining it."""
+        if self._closing:
+            await self._end_session()
+            raise _StartAborted()
+
+    async def _wait_or_closed(self, event: asyncio.Event, seconds: float | None) -> bool:
+        """Wait up to ``seconds`` (``None``: no limit) for ``event``; return
+        early on shutdown.
+
+        Returns:
+            Whether ``event`` is set.
+        """
+        waiters = {asyncio.ensure_future(event.wait()), asyncio.ensure_future(self._closed.wait())}
+        try:
+            await asyncio.wait(waiters, timeout=seconds, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for waiter in waiters:
+                waiter.cancel()
+        return event.is_set()
 
     def _remember(self, info: AvatarSessionInfo) -> None:
         self.session_info = info
@@ -408,6 +494,7 @@ class AtmeeVideoService(AIService):
         # The session is over: drop further speech instead of waiting for an
         # avatar that will not come back.
         self._closing = True
+        self._closed.set()
         self._avatar_ready.clear()
         await self._call_event_handler("on_avatar_disconnected", self.session_id)
         await self._end_session()
@@ -494,14 +581,20 @@ class AtmeeVideoService(AIService):
             await self.push_frame(frame, direction)
 
     async def _send_audio(self, frame: TTSAudioRawFrame) -> None:
-        if self._sender is None or self._closing:
+        if self._closing:
             return
         if not self._avatar_ready.is_set():
             if self._avatar_wait_failed:
                 return  # already reported: drop until the avatar shows up
-            try:
-                await asyncio.wait_for(self._avatar_ready.wait(), self._avatar_join_timeout)
-            except TimeoutError:
+            # The start (warm-up retries included) is bounded by its own
+            # timeouts; avatar_join_timeout counts from a started session.
+            if self._start_task is not None:
+                await self._wait_or_closed(self._start_done, None)
+                if self._closing:
+                    return
+            if not await self._wait_or_closed(self._avatar_ready, self._avatar_join_timeout):
+                if self._closing:
+                    return
                 self._avatar_wait_failed = True
                 await self.push_error(
                     f"the Atmee avatar was not ready after {self._avatar_join_timeout:.0f}s; "
@@ -558,6 +651,8 @@ class AtmeeVideoService(AIService):
     async def _teardown(self) -> None:
         async with self._teardown_lock:
             self._closing = True
+            self._closed.set()
+            await self._abort_start()
             await self._end_session()
             for task in (self._video_task, self._audio_task):
                 if task is not None:
@@ -573,6 +668,17 @@ class AtmeeVideoService(AIService):
                 except Exception as e:
                     logger.warning(f"{self}: leaving the media room failed: {e}")
             self._avatar_ready.clear()
+
+    async def _abort_start(self) -> None:
+        """Let a start still in flight finish (it ends what it created), or
+        cancel it after a grace period."""
+        task = self._start_task
+        if task is None or task.done() or task is asyncio.current_task():
+            return
+        done, _ = await asyncio.wait({task}, timeout=_START_ABORT_GRACE_SECONDS)
+        if not done:
+            logger.warning(f"{self}: the Atmee avatar session was still starting; giving up on it")
+            await self.cancel_task(task)
 
     async def _end_session(self) -> None:
         """``POST /end``; marked done only once the API confirmed it, so a later

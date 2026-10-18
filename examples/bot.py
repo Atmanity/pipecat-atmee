@@ -44,7 +44,8 @@ from pipecat_atmee import AtmeeVideoService
 
 load_dotenv(override=True)
 
-# Atmee v1 avatars render 512x512 at 25 fps: send them at that size.
+# Atmee v1 avatars render 512x512 at 25 fps: send them at that size (frames of
+# another size, e.g. from a v2 avatar, are rescaled by the transport).
 VIDEO = {
     "video_out_enabled": True,
     "video_out_is_live": True,

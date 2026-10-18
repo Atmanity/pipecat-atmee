@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Any
 
 import pytest
@@ -12,7 +14,12 @@ from pipecat.frames.frames import (
 )
 from pipecat.tests.utils import SleepFrame, run_test
 
-from pipecat_atmee import AtmeeException, AtmeeVideoService
+from pipecat_atmee import (
+    AtmeeAvatarWarmingError,
+    AtmeeException,
+    AtmeeVideoService,
+    AvatarSessionInfo,
+)
 
 
 class FakeSender:
@@ -144,3 +151,117 @@ def test_byo_tokens():
 def test_byo_needs_all_three():
     with pytest.raises(AtmeeException):
         AtmeeVideoService(avatar_id="a-1", api_key="k", livekit_url="wss://x")
+
+
+class WarmingAPI(FakeAPI):
+    """Answers avatar_warming ``warm_for`` times, then starts the session."""
+
+    def __init__(self, warm_for: int) -> None:
+        super().__init__()
+        self.starts = 0
+        self._warm_for = warm_for
+        self.warm_retry_after = 0.01
+
+    async def create_avatar_session(self, avatar_id: str, **kwargs: Any) -> str:
+        self.starts += 1
+        if self.starts <= self._warm_for:
+            raise AtmeeAvatarWarmingError("preparing", retry_after=self.warm_retry_after)
+        return "info"
+
+
+async def test_start_retries_while_the_avatar_warms_up():
+    service = AtmeeVideoService(avatar_id="a-1", api_key="sk_atmee_test")
+    service._api = WarmingAPI(warm_for=2)  # type: ignore[assignment]
+    assert await service._create_session(agent_identity="bot") == "info"
+    assert service._api.starts == 3
+
+
+async def test_warming_retries_stop_at_the_warmup_timeout():
+    service = AtmeeVideoService(
+        avatar_id="a-1", api_key="sk_atmee_test", avatar_warmup_timeout=0.015
+    )
+    service._api = WarmingAPI(warm_for=100)  # type: ignore[assignment]
+    with pytest.raises(AtmeeAvatarWarmingError):
+        await service._create_session(agent_identity="bot")
+    assert service._api.starts == 2
+
+
+class BlockingStartAPI(FakeAPI):
+    """A start call that only returns once ``release`` is set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+        self.starts = 0
+
+    async def create_avatar_session(self, avatar_id: str, **kwargs: Any) -> AvatarSessionInfo:
+        self.starts += 1
+        await self.release.wait()
+        return AvatarSessionInfo(
+            session_id="s-late",
+            status="initializing",
+            avatar_participant_identity="atmee-avatar-agent",
+            agent_identity="bot",
+            room_name="r",
+            max_duration_seconds=60,
+            billing_mode="reserve",
+            livekit_url="wss://example",
+            agent_token="t",
+        )
+
+
+def bare_service(**kwargs: Any) -> AtmeeVideoService:
+    service = AtmeeVideoService(avatar_id="a-1", api_key="sk_atmee_test", **kwargs)
+    service.cancel_task = _cancel  # type: ignore[method-assign]
+    return service
+
+
+async def _cancel(task: asyncio.Task, *_: Any) -> None:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+async def test_stop_during_warming_pause_starts_nothing_more():
+    service = bare_service()
+    api = WarmingAPI(warm_for=100)
+    api.warm_retry_after = 30.0
+    service._api = api  # type: ignore[assignment]
+    task = asyncio.ensure_future(service._create_session(agent_identity="bot"))
+    await asyncio.sleep(0.05)  # first attempt answered avatar_warming; now pausing
+    service._closing = True
+    service._closed.set()
+    with pytest.raises(Exception) as err:
+        await asyncio.wait_for(task, 1.0)
+    assert type(err.value).__name__ == "_StartAborted"
+    assert api.starts == 1
+
+
+async def test_stop_during_start_call_ends_the_created_session():
+    service = bare_service()
+    api = BlockingStartAPI()
+    service._api = api  # type: ignore[assignment]
+    service._start_task = asyncio.ensure_future(service._run_start())
+    await asyncio.sleep(0.01)
+    teardown = asyncio.ensure_future(service._teardown())
+    await asyncio.sleep(0.01)
+    api.release.set()  # the start call returns after the pipeline stopped
+    await asyncio.wait_for(teardown, 2.0)
+    assert service.session_id == "s-late"
+    assert api.ended == ["s-late"]
+    assert service._room is None
+
+
+async def test_first_speech_waits_for_the_start_before_the_join_timeout():
+    service = bare_service(avatar_join_timeout=0.05)
+    service._start_task = asyncio.ensure_future(asyncio.sleep(1))  # still starting
+    service._sender = FakeSender()  # type: ignore[assignment]
+    send = asyncio.ensure_future(service._send_audio(tts_audio()))
+    await asyncio.sleep(0.2)  # longer than the join timeout, but the start is not done
+    assert not send.done()
+    assert not service._avatar_wait_failed
+    service._start_done.set()
+    service._avatar_ready.set()
+    await asyncio.wait_for(send, 1.0)
+    assert service._sender.calls == ["write"]  # type: ignore[union-attr]
+    service._start_task.cancel()

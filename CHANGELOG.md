@@ -8,11 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- `AtmeeVideoService`: renders an Atmee v1 avatar lip-synced to the bot's TTS
+- `AtmeeVideoService`: renders an Atmee avatar (v1 or v2) lip-synced to the bot's TTS
   and pushes its video and audio into the pipeline, for any Pipecat transport.
   Interruptions stop the avatar mid-sentence; the session ends with the
   pipeline.
 - Atmee-hosted media room by default (only an Atmee API key needed), or your
   own LiveKit project via `livekit_url` / `livekit_api_key` / `livekit_api_secret`.
-- `AtmeeAPI`: create avatars from a portrait, start, read and end avatar sessions.
+- v2 avatars: the start retries while the avatar warms up on a rendering
+  machine (`avatar_warmup_timeout`, `AtmeeAvatarWarmingError`), and the
+  default `avatar_join_timeout` (330 s) covers a cold start.
+- `AtmeeAPI`: create v1 avatars from a portrait, start, read and end avatar sessions.
 - Examples: `examples/bot.py` (SmallWebRTC / Daily / LiveKit), `examples/create_avatar.py`.

@@ -1,8 +1,8 @@
 # pipecat-atmee
 
 Give your [Pipecat](https://github.com/pipecat-ai/pipecat) bot a face.
-`AtmeeVideoService` renders an Atmee **v1 avatar**, a talking head generated
-from a single portrait, lip-synced to your bot's speech. Your bot keeps its
+`AtmeeVideoService` renders an Atmee avatar, **v1 or v2**, lip-synced to your
+bot's speech. Your bot keeps its
 own STT, LLM and TTS; Atmee only renders the face, and the avatar's video and
 audio flow back into your pipeline to whatever transport you use (Daily,
 SmallWebRTC, LiveKit, ...).
@@ -35,23 +35,34 @@ Python 3.11+, `pipecat-ai` 1.8 or newer.
 - An **Atmee API key** (`sk_atmee_...`) in `ATMEE_API_KEY`. Create one in the
   Atmee studio at [atmee.ai/studio/api-keys](https://www.atmee.ai/studio/api-keys).
   Keep it on your bot's side; it never belongs in a browser.
-- An **avatar id**. Create an avatar from one portrait, once:
+- An **avatar id**. Any avatar of your account works, v1 or v2:
 
-  ```python
-  from pipecat_atmee import AtmeeAPI
+  - **v1 avatars** are talking heads generated from a single portrait. Create
+    one through the API, once:
 
-  async with AtmeeAPI() as api:                  # reads ATMEE_API_KEY
-      avatar_id = await api.create_avatar(name="Val", image="portrait.jpg")
-  ```
+    ```python
+    from pipecat_atmee import AtmeeAPI
 
-  `image` may be a local file path, raw bytes, or an `https://` URL (`.jpg`,
-  `.png`, `.webp`). A portrait-only avatar is ready immediately. Any avatar of
-  your account in the [Atmee studio](https://atmee.ai) works too.
+    async with AtmeeAPI() as api:                  # reads ATMEE_API_KEY
+        avatar_id = await api.create_avatar(name="Val", image="portrait.jpg")
+    ```
+
+    `image` may be a local file path, raw bytes, or an `https://` URL
+    (`.jpg`, `.png`, `.webp`). A portrait-only avatar is ready immediately.
+    Avatars you made in the [Atmee studio](https://atmee.ai) work too.
+  - **v2 avatars** are Atmee's newer avatars. They can't be created from a
+    portrait through the API yet; [contact Atmee](https://atmee.ai) to get
+    one set up for your account, then use its id like any other. A v2 avatar
+    on a cold rendering machine can take a few minutes to start; the
+    service waits for it (see `avatar_warmup_timeout` and
+    `avatar_join_timeout`).
 
 ## Usage
 
 Put `AtmeeVideoService` right after your TTS service and enable video output
-on the transport at the avatar's size, **512x512 at 25 fps**:
+on the transport at the avatar's size. v1 avatars render **512x512 at
+25 fps**; the service logs the size of the avatar's video when it connects, and
+Pipecat rescales frames that don't match the transport's size:
 
 ```python
 params = TransportParams(           # or DailyParams / LiveKitParams
@@ -116,7 +127,8 @@ avatar = AtmeeVideoService(
 | `livekit_url`, `livekit_api_key`, `livekit_api_secret` | `None` | Render into a room of your own LiveKit project instead of an Atmee-hosted one. |
 | `livekit_room_name` | random | Room name in your own LiveKit project. |
 | `avatar_participant_identity` | `atmee-avatar-agent` | The avatar's identity in your own LiveKit room. |
-| `avatar_join_timeout` | `120` | How long the first speech waits for the avatar's video before it is dropped with an error. |
+| `avatar_join_timeout` | `330` | How long the first speech waits, once the session has started, for the avatar's video before it is dropped with an error. Speech waits for the start itself too. |
+| `avatar_warmup_timeout` | `300` | How long the start keeps retrying while a v2 avatar is being prepared on a rendering machine. |
 | `session` | `None` | An `aiohttp.ClientSession` to reuse for API calls. |
 
 After start, `service.session_id` holds the Atmee session id.
@@ -140,8 +152,9 @@ A session that cannot start (bad key, unknown avatar, no credits, no rendering
 capacity) pushes an `ErrorFrame` marking the service unusable; the pipeline
 worker's `ProcessorUnusablePolicy` decides whether the pipeline goes on. The
 API client raises `AtmeeException` (with `status_code` and `code`),
-`AtmeeNoCapacityError` (with the server's `retry_after` hint) and
-`AtmeeAvatarNotReadyError`.
+`AtmeeNoCapacityError` and `AtmeeAvatarWarmingError` (both with the server's
+`retry_after` hint) and `AtmeeAvatarNotReadyError`. The service itself retries
+the start while a v2 avatar is warming up.
 
 ## Running the example
 

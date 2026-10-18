@@ -176,8 +176,9 @@ class AtmeeVideoService(AIService):
             livekit_api_secret: Your LiveKit API secret (bring-your-own-LiveKit).
                 It never leaves your process: the avatar's token is minted locally.
             livekit_room_name: Room name in your LiveKit project; random by default.
-            avatar_join_timeout: How long the first bot speech waits for the
-                avatar to be ready before it is dropped with an error.
+            avatar_join_timeout: How long the first bot speech waits, once the
+                session has started, for the avatar's video before it is
+                dropped with an error.
             avatar_warmup_timeout: How long the start keeps retrying while a
                 v2 avatar is being prepared on a rendering machine.
             conn_options: Retry/timeout policy of the API client.
@@ -229,6 +230,8 @@ class AtmeeVideoService(AIService):
         self._audio_task: asyncio.Task | None = None
         self._started = False
         self._start_task: asyncio.Task | None = None
+        # Set once the background start finished, successfully or not.
+        self._start_done: asyncio.Event = asyncio.Event()
         self._ended = False
         self._closing = False
         # Set together with _closing: wakes waits that must end on shutdown.
@@ -304,6 +307,8 @@ class AtmeeVideoService(AIService):
                 exception=e,
                 force_treat_as_permanent=True,
             )
+        finally:
+            self._start_done.set()
 
     async def stop(self, frame: EndFrame):
         """End the avatar session gracefully.
@@ -392,8 +397,9 @@ class AtmeeVideoService(AIService):
             await self._end_session()
             raise _StartAborted()
 
-    async def _wait_or_closed(self, event: asyncio.Event, seconds: float) -> bool:
-        """Wait up to ``seconds`` for ``event``; return early on shutdown.
+    async def _wait_or_closed(self, event: asyncio.Event, seconds: float | None) -> bool:
+        """Wait up to ``seconds`` (``None``: no limit) for ``event``; return
+        early on shutdown.
 
         Returns:
             Whether ``event`` is set.
@@ -580,7 +586,12 @@ class AtmeeVideoService(AIService):
         if not self._avatar_ready.is_set():
             if self._avatar_wait_failed:
                 return  # already reported: drop until the avatar shows up
-            # Also covers the session still starting in the background.
+            # The start (warm-up retries included) is bounded by its own
+            # timeouts; avatar_join_timeout counts from a started session.
+            if self._start_task is not None:
+                await self._wait_or_closed(self._start_done, None)
+                if self._closing:
+                    return
             if not await self._wait_or_closed(self._avatar_ready, self._avatar_join_timeout):
                 if self._closing:
                     return

@@ -127,7 +127,7 @@ avatar = AtmeeVideoService(
 | `livekit_url`, `livekit_api_key`, `livekit_api_secret` | `None` | Render into a room of your own LiveKit project instead of an Atmee-hosted one. |
 | `livekit_room_name` | random | Room name in your own LiveKit project. |
 | `avatar_participant_identity` | `atmee-avatar-agent` | The avatar's identity in your own LiveKit room. |
-| `avatar_join_timeout` | `330` | How long the first speech waits for the avatar's video before it is dropped with an error. |
+| `avatar_join_timeout` | `330` | How long the first speech waits, once the session has started, for the avatar's video before it is dropped with an error. Speech waits for the start itself too. |
 | `avatar_warmup_timeout` | `300` | How long the start keeps retrying while a v2 avatar is being prepared on a rendering machine. |
 | `session` | `None` | An `aiohttp.ClientSession` to reuse for API calls. |
 

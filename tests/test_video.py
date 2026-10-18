@@ -250,3 +250,18 @@ async def test_stop_during_start_call_ends_the_created_session():
     assert service.session_id == "s-late"
     assert api.ended == ["s-late"]
     assert service._room is None
+
+
+async def test_first_speech_waits_for_the_start_before_the_join_timeout():
+    service = bare_service(avatar_join_timeout=0.05)
+    service._start_task = asyncio.ensure_future(asyncio.sleep(1))  # still starting
+    service._sender = FakeSender()  # type: ignore[assignment]
+    send = asyncio.ensure_future(service._send_audio(tts_audio()))
+    await asyncio.sleep(0.2)  # longer than the join timeout, but the start is not done
+    assert not send.done()
+    assert not service._avatar_wait_failed
+    service._start_done.set()
+    service._avatar_ready.set()
+    await asyncio.wait_for(send, 1.0)
+    assert service._sender.calls == ["write"]  # type: ignore[union-attr]
+    service._start_task.cancel()

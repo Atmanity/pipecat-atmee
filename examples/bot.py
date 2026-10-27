@@ -15,6 +15,10 @@ Run with the Pipecat development runner:
     uv run examples/bot.py                      # SmallWebRTC, open http://localhost:7860
     uv run examples/bot.py --transport daily    # needs DAILY_API_KEY
 
+On Daily the avatar joins the room itself (AtmeeDailyVideoService); on the
+other transports the bot shows the avatar's video as its own
+(AtmeeVideoService).
+
 Environment (see examples/.env.example): ATMEE_API_KEY, ATMEE_AVATAR_ID,
 DEEPGRAM_API_KEY, OPENAI_API_KEY.
 """
@@ -40,7 +44,7 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.workers.runner import WorkerRunner
 
-from pipecat_atmee import AtmeeVideoService
+from pipecat_atmee import AtmeeDailyVideoService, AtmeeVideoService
 
 load_dotenv(override=True)
 
@@ -58,7 +62,9 @@ VIDEO = {
 def _daily_params():
     from pipecat.transports.daily.transport import DailyParams
 
-    return DailyParams(audio_in_enabled=True, audio_out_enabled=True, **VIDEO)
+    # The avatar joins the room and publishes the bot's face and voice; the
+    # bot's own microphone stays off so users hear only the avatar.
+    return DailyParams(audio_in_enabled=True, audio_out_enabled=True, microphone_out_enabled=False)
 
 
 def _livekit_params():
@@ -91,8 +97,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         settings=OpenAITTSService.Settings(voice="ash"),
     )
 
-    # The avatar replaces the TTS audio with its own lip-synced audio + video.
-    avatar = AtmeeVideoService(avatar_id=os.environ["ATMEE_AVATAR_ID"])
+    avatar: AtmeeVideoService
+    if type(transport).__name__ == "DailyTransport":
+        # The avatar joins the Daily room as its own participant.
+        avatar = AtmeeDailyVideoService(
+            transport=transport,  # type: ignore[arg-type]
+            avatar_id=os.environ["ATMEE_AVATAR_ID"],
+        )
+    else:
+        # The avatar replaces the TTS audio with its own lip-synced audio + video.
+        avatar = AtmeeVideoService(avatar_id=os.environ["ATMEE_AVATAR_ID"])
 
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(

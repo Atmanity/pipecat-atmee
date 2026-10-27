@@ -34,6 +34,7 @@ from pipecat_atmee.video import AtmeeVideoService, AtmeeVideoSettings
 
 __all__ = [
     "AtmeeAPI",
+    "AtmeeDailyVideoService",
     "AtmeeAvatarNotReadyError",
     "AtmeeAvatarWarmingError",
     "AtmeeException",
@@ -46,3 +47,12 @@ __all__ = [
     "ConnectOptions",
     "__version__",
 ]
+
+
+def __getattr__(name: str):
+    # Imported on first use: it needs Pipecat's optional Daily transport.
+    if name == "AtmeeDailyVideoService":
+        from pipecat_atmee.daily import AtmeeDailyVideoService
+
+        return AtmeeDailyVideoService
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

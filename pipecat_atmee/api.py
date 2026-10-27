@@ -220,6 +220,9 @@ class AtmeeAPI:
         livekit_url: str | None = None,
         livekit_token: str | None = None,
         agent_identity: str | None = None,
+        daily_room_url: str | None = None,
+        daily_token: str | None = None,
+        daily_participant_id: str | None = None,
         max_duration_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
         wait_for: WaitFor = "initializing",
@@ -234,13 +237,28 @@ class AtmeeAPI:
         ``roomJoin`` grant, and the ``lk.publish_on_behalf`` attribute naming
         your bot's identity).
 
+        With ``daily_room_url`` and ``daily_participant_id`` (your bot's Daily
+        participant id) the avatar joins that Daily room instead, as its own
+        participant, with ``daily_token`` (a meeting token you minted for it;
+        not needed for a public room). Your bot then sends it the speech as
+        Daily app messages, which :class:`AtmeeDailyVideoService` does.
+
         Returns as soon as the renderer acknowledged the start, or once the
         avatar joined with ``wait_for="avatar_joined"``. Never retried: the
         call reserves and bills a session as soon as the server accepts it.
         """
         if bool(livekit_url) != bool(livekit_token):
             raise ValueError("livekit_url and livekit_token must be given together")
+        daily = bool(daily_room_url)
+        if daily != bool(daily_participant_id):
+            raise ValueError("daily_room_url and daily_participant_id must be given together")
+        if daily and livekit_url:
+            raise ValueError("a session renders into a Daily room or a LiveKit room, not both")
         payload: dict[str, Any] = {}
+        if daily:
+            payload["daily"] = {"roomUrl": daily_room_url, "participantId": daily_participant_id}
+            if daily_token:
+                payload["daily"]["token"] = daily_token
         if livekit_url and livekit_token:
             payload["livekitUrl"] = livekit_url
             payload["livekitToken"] = livekit_token
@@ -279,7 +297,7 @@ class AtmeeAPI:
             agent_token=_str_or_none(data.get("agentToken")),
             raw={k: v for k, v in data.items() if k != "agentToken"},
         )
-        if not livekit_url and not (info.livekit_url and info.agent_token):
+        if not livekit_url and not daily and not (info.livekit_url and info.agent_token):
             # Hosted room requested but the answer carries no way into it: the
             # session exists and bills, so the caller must end it.
             raise AtmeeHostedRoomMissingError(info)

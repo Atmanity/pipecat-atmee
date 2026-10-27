@@ -31,6 +31,10 @@ dependencies = [
     "numpy>=1.26",
 ]
 
+[project.optional-dependencies]
+# AtmeeDailyVideoService: the avatar joins the bot's Daily room.
+daily = ["pipecat-ai[daily]>=1.8,<2"]
+
 [project.urls]
 Documentation = "https://github.com/Atmanity/pipecat-atmee#readme"
 Website = "https://atmee.ai"

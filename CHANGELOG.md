@@ -17,5 +17,7 @@ All notable changes to this project are documented here. The format follows
 - v2 avatars: the start retries while the avatar warms up on a rendering
   machine (`avatar_warmup_timeout`, `AtmeeAvatarWarmingError`), and the
   default `avatar_join_timeout` (330 s) covers a cold start.
+- `AtmeeDailyVideoService` (extra `daily`): on `DailyTransport` the avatar joins
+  the bot's Daily room as its own participant and publishes there directly.
 - `AtmeeAPI`: create v1 avatars from a portrait, start, read and end avatar sessions.
 - Examples: `examples/bot.py` (SmallWebRTC / Daily / LiveKit), `examples/create_avatar.py`.

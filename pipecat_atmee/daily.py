@@ -171,11 +171,18 @@ class AtmeeDailyVideoService(AtmeeVideoService):
         self._outbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._send_task: asyncio.Task | None = None
         self._hello_task: asyncio.Task | None = None
+        # The bot's own participant id, from the join; DailyTransport's
+        # ``participant_id`` is not filled in by every Pipecat release.
+        self._bot_id: str | None = None
 
+        transport.add_event_handler("on_joined", self._on_joined)
         transport.add_event_handler("on_app_message", self._on_app_message)
         transport.add_event_handler("on_participant_left", self._on_participant_left)
 
     # --- start -----------------------------------------------------------------
+
+    async def _on_joined(self, _transport: Any, data: dict[str, Any]) -> None:
+        self._bot_id = (data.get("participants") or {}).get("local", {}).get("id") or None
 
     async def _start_session(self) -> None:
         participant_id = await self._bot_participant_id()
@@ -201,7 +208,7 @@ class AtmeeDailyVideoService(AtmeeVideoService):
         """The bot's Daily participant id, once it has joined its room."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _JOIN_WAIT_SECONDS
-        while not self._transport.participant_id:
+        while not (self._bot_id or self._transport.participant_id):
             if self._closing:
                 raise AtmeeException("the pipeline stopped before the bot joined its Daily room")
             if loop.time() > deadline:
@@ -209,7 +216,7 @@ class AtmeeDailyVideoService(AtmeeVideoService):
                     f"the bot did not join its Daily room within {_JOIN_WAIT_SECONDS:.0f}s"
                 )
             await asyncio.sleep(0.1)
-        return self._transport.participant_id
+        return self._bot_id or self._transport.participant_id
 
     async def _mint_daily_token(self, room_url: str) -> str:
         room_name = room_url.rstrip("/").rsplit("/", 1)[-1]

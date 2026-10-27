@@ -31,8 +31,8 @@ class FakeOutput:
 class FakeTransport:
     """The part of DailyTransport the service uses."""
 
-    def __init__(self, *, avatar_answers: bool = True) -> None:
-        self.participant_id = "bot-1"
+    def __init__(self, *, avatar_answers: bool = True, participant_id: str = "bot-1") -> None:
+        self.participant_id = participant_id
         self.room_url = "https://acme.daily.co/bot-room"
         self.sent: list[tuple[str | None, dict[str, Any]]] = []
         self.handlers: dict[str, Any] = {}
@@ -274,3 +274,21 @@ async def test_the_api_sends_the_daily_room(fake_api: Any):
     assert fake_api.calls("/v1/avatars/a-1/avatar_sessions") == [
         {"daily": {"roomUrl": "https://acme.daily.co/r", "participantId": "bot-1", "token": "tok"}}
     ]
+
+
+async def test_the_bot_id_comes_from_the_join_when_the_transport_has_none():
+    # Some Pipecat releases log the bot's participant id on join but leave
+    # DailyTransport.participant_id empty.
+    transport = FakeTransport(participant_id="")
+    svc = Harness(transport)
+
+    async def bot_joins() -> None:
+        await asyncio.sleep(0.1)
+        await transport.handlers["on_joined"](
+            transport, {"participants": {"local": {"id": "bot-1"}}}
+        )
+
+    task = asyncio.create_task(bot_joins())
+    await run_test(svc, frames_to_send=[SleepFrame(0.4)])
+    await task
+    assert [s["daily_participant_id"] for s in svc.started] == ["bot-1"]

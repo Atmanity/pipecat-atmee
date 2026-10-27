@@ -168,7 +168,10 @@ class AtmeeDailyVideoService(AtmeeVideoService):
         self._avatar_participant: str | None = None
         self._segment: str | None = None
         self._pending = bytearray()
-        self._outbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # Speech for the avatar, tagged with the interruption count it was
+        # queued under: an interruption drops whatever came before it.
+        self._outbox: asyncio.Queue[tuple[int, dict[str, Any]]] = asyncio.Queue()
+        self._interruptions = 0
         self._send_task: asyncio.Task | None = None
         self._hello_task: asyncio.Task | None = None
         # The bot's own participant id, from the join; DailyTransport's
@@ -318,12 +321,15 @@ class AtmeeDailyVideoService(AtmeeVideoService):
 
     def _queue_audio(self, pcm: bytes) -> None:
         self._outbox.put_nowait(
-            {
-                MESSAGE_KEY: "audio",
-                "segment": self._segment,
-                "audio": base64.b64encode(pcm).decode("ascii"),
-                "sample_rate": AVATAR_SAMPLE_RATE,
-            }
+            (
+                self._interruptions,
+                {
+                    MESSAGE_KEY: "audio",
+                    "segment": self._segment,
+                    "audio": base64.b64encode(pcm).decode("ascii"),
+                    "sample_rate": AVATAR_SAMPLE_RATE,
+                },
+            )
         )
 
     async def _send_audio(self, frame: TTSAudioRawFrame) -> None:
@@ -359,28 +365,31 @@ class AtmeeDailyVideoService(AtmeeVideoService):
         if self._pending:
             self._queue_audio(bytes(self._pending))
             self._pending.clear()
-        self._outbox.put_nowait({MESSAGE_KEY: "audio_end", "segment": self._segment})
+        self._outbox.put_nowait(
+            (self._interruptions, {MESSAGE_KEY: "audio_end", "segment": self._segment})
+        )
         self._segment = None
 
     async def _interrupt(self) -> None:
-        if not self._avatar_ready.is_set() or not self._avatar_busy:
-            return
-        self._avatar_busy = False
-        self._playout_end = 0.0
+        # Speech not yet sent is dropped here, even before the avatar is
+        # ready; what the avatar already has is dropped there.
+        self._interruptions += 1
         self._segment = None
         self._pending.clear()
-        # Speech not yet sent is dropped here; what the avatar already has is
-        # dropped there.
+        self._resampler_in_rate = None  # a fresh resampler: it holds the old speech's tail
         while not self._outbox.empty():
             self._outbox.get_nowait()
-        self._send_now({MESSAGE_KEY: "clear_buffer"})
+        busy, self._avatar_busy = self._avatar_busy, False
+        self._playout_end = 0.0
+        if busy and self._avatar_ready.is_set():
+            self._send_now({MESSAGE_KEY: "clear_buffer"})
 
     # --- sending --------------------------------------------------------------------
 
     async def _send_loop(self) -> None:
         """Send queued messages to the avatar in order, once it is ready."""
         while True:
-            message = await self._outbox.get()
+            queued_under, message = await self._outbox.get()
             if not self._avatar_ready.is_set():
                 if self._avatar_wait_failed:
                     continue  # already reported: drop until the avatar shows up
@@ -397,6 +406,8 @@ class AtmeeDailyVideoService(AtmeeVideoService):
                         "dropping bot speech"
                     )
                     continue
+            if queued_under != self._interruptions:
+                continue  # interrupted while waiting for the avatar
             await self._send(message, self._avatar_participant)
 
     def _send_now(self, message: dict[str, Any], *, broadcast: bool = False) -> None:

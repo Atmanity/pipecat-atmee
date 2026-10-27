@@ -644,6 +644,7 @@ class AtmeeVideoService(AIService):
         self._avatar_busy = False
         self._playout_end = 0.0
         self._muted_until = time.monotonic() + INTERRUPT_MUTE_SECONDS
+        self._resampler_in_rate = None  # a fresh resampler: it holds the old speech's tail
         await self._sender.clear()
 
     # --- teardown -------------------------------------------------------------------

@@ -292,3 +292,36 @@ async def test_the_bot_id_comes_from_the_join_when_the_transport_has_none():
     await run_test(svc, frames_to_send=[SleepFrame(0.4)])
     await task
     assert [s["daily_participant_id"] for s in svc.started] == ["bot-1"]
+
+
+async def test_an_interruption_before_the_avatar_is_ready_drops_that_speech():
+    transport = FakeTransport(avatar_answers=False)
+    svc = Harness(transport)
+
+    async def avatar_joins_late() -> None:
+        await asyncio.sleep(0.5)
+        await transport.deliver({MESSAGE_KEY: "ready"}, "avatar-1")
+
+    task = asyncio.create_task(avatar_joins_late())
+    await run_test(
+        svc,
+        frames_to_send=[
+            TTSStartedFrame(),
+            *[tts_audio() for _ in range(10)],
+            SleepFrame(0.1),
+            InterruptionFrame(),
+            TTSStartedFrame(),
+            *[tts_audio() for _ in range(5)],
+            TTSStoppedFrame(),
+            SleepFrame(0.8),
+        ],
+    )
+    await task
+    chunks = transport.to_avatar("audio")
+    pcm = b"".join(base64.b64decode(c["audio"]) for c in chunks)
+    # Only the reply after the interruption, 0.1 s, in a segment of its own.
+    assert abs(len(pcm) / 32000 - 0.1) < 0.03
+    assert len({c["segment"] for c in chunks}) == 1
+    assert [m["segment"] for m in transport.to_avatar("audio_end")] == [chunks[0]["segment"]]
+    # Nothing was playing on the avatar, so nothing to clear there.
+    assert transport.to_avatar("clear_buffer") == []

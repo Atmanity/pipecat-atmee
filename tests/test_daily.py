@@ -18,7 +18,6 @@ from pipecat.tests.utils import run_test as _run_test
 from pipecat_atmee import AtmeeAPI, AtmeeDailyVideoService
 from pipecat_atmee.daily import MESSAGE_KEY
 
-
 # A cold CI runner can take over run_test's default second to start the pipeline.
 run_test = functools.partial(_run_test, start_timeout=5.0)
 

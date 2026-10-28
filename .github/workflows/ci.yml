@@ -25,7 +25,7 @@ jobs:
       - name: Install
         run: |
           uv venv
-          uv pip install -e . --group dev "pipecat-ai${{ matrix.pipecat }}"
+          uv pip install -e ".[daily]" --group dev "pipecat-ai[daily]${{ matrix.pipecat }}"
       - name: Lint
         run: |
           uv run ruff check .

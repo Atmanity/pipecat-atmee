@@ -115,6 +115,37 @@ avatar = AtmeeVideoService(
 )
 ```
 
+### On Daily: the avatar joins your room
+
+If your bot uses `DailyTransport`, use `AtmeeDailyVideoService` instead. The
+avatar joins your Daily room as its own participant ("Atmee avatar") and
+publishes its lip-synced video and voice there directly; your bot streams its
+TTS audio to it over Daily app messages and never handles video.
+
+```bash
+uv add "pipecat-atmee[daily]"
+```
+
+```python
+from pipecat_atmee import AtmeeDailyVideoService
+
+transport = DailyTransport(room_url, token, "bot", DailyParams(
+    audio_in_enabled=True,
+    audio_out_enabled=True,
+    microphone_out_enabled=False,   # users hear the avatar, not the bot twice
+))
+avatar = AtmeeDailyVideoService(transport=transport, avatar_id="...")
+```
+
+- With `DAILY_API_KEY` set (or `daily_api_key=`), the service mints the
+  avatar's meeting token for the room; without it the room must be joinable
+  without a token.
+- Users see the avatar as a separate participant: in Daily Prebuilt it is a
+  tile of its own; in a custom client, render the participant named
+  `Atmee avatar` (`avatar_name=` changes it).
+- Interruptions, events and the session lifecycle are the same as above; the
+  avatar leaves when your bot leaves the room.
+
 ### Options
 
 | Argument | Default | Meaning |

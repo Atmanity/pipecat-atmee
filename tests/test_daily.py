@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 from typing import Any
 
 import pytest
@@ -11,10 +12,15 @@ from pipecat.frames.frames import (
     TTSStartedFrame,
     TTSStoppedFrame,
 )
-from pipecat.tests.utils import SleepFrame, run_test
+from pipecat.tests.utils import SleepFrame
+from pipecat.tests.utils import run_test as _run_test
 
 from pipecat_atmee import AtmeeAPI, AtmeeDailyVideoService
 from pipecat_atmee.daily import MESSAGE_KEY
+
+
+# A cold CI runner can take over run_test's default second to start the pipeline.
+run_test = functools.partial(_run_test, start_timeout=5.0)
 
 
 class FakeOutput:
@@ -319,8 +325,9 @@ async def test_an_interruption_before_the_avatar_is_ready_drops_that_speech():
     await task
     chunks = transport.to_avatar("audio")
     pcm = b"".join(base64.b64decode(c["audio"]) for c in chunks)
-    # Only the reply after the interruption, 0.1 s, in a segment of its own.
-    assert abs(len(pcm) / 32000 - 0.1) < 0.03
+    # Only the reply after the interruption, 0.1 s (less the resampler's
+    # latency where Pipecat cannot flush it), in a segment of its own.
+    assert 0.05 < len(pcm) / 32000 < 0.105
     assert len({c["segment"] for c in chunks}) == 1
     assert [m["segment"] for m in transport.to_avatar("audio_end")] == [chunks[0]["segment"]]
     # Nothing was playing on the avatar, so nothing to clear there.

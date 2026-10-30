@@ -73,8 +73,9 @@ MESSAGE_KEY = "atmee"
 DEFAULT_AVATAR_NAME = "Atmee avatar"
 DAILY_API_URL = "https://api.daily.co/v1"
 # Speech goes to the avatar in chunks of this many milliseconds (16 kHz mono
-# 16-bit PCM, base64): small enough for a Daily app message.
-CHUNK_MS = 100
+# 16-bit PCM, base64): about 3.5 kB per message, within Daily's 4 kB limit
+# for an app message.
+CHUNK_MS = 80
 _CHUNK_BYTES = AVATAR_SAMPLE_RATE * 2 * CHUNK_MS // 1000
 # How long the start waits for the bot to have joined its Daily room.
 _JOIN_WAIT_SECONDS = 60.0

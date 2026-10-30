@@ -131,7 +131,7 @@ async def test_speech_goes_to_the_avatar_and_on_downstream():
     assert sum(isinstance(f, TTSAudioRawFrame) for f in down) == 25
     chunks = transport.to_avatar("audio")
     pcm = b"".join(base64.b64decode(c["audio"]) for c in chunks)
-    # 0.5 s at 24 kHz, resampled to 16 kHz 16-bit mono, in 100 ms messages
+    # 0.5 s at 24 kHz, resampled to 16 kHz 16-bit mono, in 80 ms messages
     assert abs(len(pcm) / 32000 - 0.5) < 0.05
     assert all(c["sample_rate"] == 16000 for c in chunks)
     assert len({c["segment"] for c in chunks}) == 1
@@ -331,3 +331,17 @@ async def test_an_interruption_before_the_avatar_is_ready_drops_that_speech():
     assert [m["segment"] for m in transport.to_avatar("audio_end")] == [chunks[0]["segment"]]
     # Nothing was playing on the avatar, so nothing to clear there.
     assert transport.to_avatar("clear_buffer") == []
+
+
+def test_an_audio_message_fits_a_daily_app_message():
+    import json
+
+    from pipecat_atmee.daily import _CHUNK_BYTES
+
+    message = {
+        MESSAGE_KEY: "audio",
+        "segment": "0" * 32,
+        "audio": base64.b64encode(b"\0" * _CHUNK_BYTES).decode(),
+        "sample_rate": 16000,
+    }
+    assert len(json.dumps(message)) < 4096

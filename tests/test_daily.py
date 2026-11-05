@@ -82,7 +82,6 @@ class Harness(AtmeeDailyVideoService):
             agent_identity="bot-1",
             room_name="bot-room",
             max_duration_seconds=3600,
-            billing_mode="metered",
         )
 
     async def _end_session(self) -> None:

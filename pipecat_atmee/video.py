@@ -365,7 +365,7 @@ class AtmeeVideoService(AIService):
             await self._connect(info.livekit_url, info.agent_token)
         logger.info(
             f"{self}: Atmee avatar session {self.session_id} started "
-            f"(billing {info.billing_mode}, ceiling {info.max_duration_seconds}s)"
+            f"(ceiling {info.max_duration_seconds}s)"
         )
         self._check_avatar_present()
 

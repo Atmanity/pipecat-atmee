@@ -204,7 +204,6 @@ class BlockingStartAPI(FakeAPI):
             agent_identity="bot",
             room_name="r",
             max_duration_seconds=60,
-            billing_mode="reserve",
             livekit_url="wss://example",
             agent_token="t",
         )

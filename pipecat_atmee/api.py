@@ -137,7 +137,6 @@ class AvatarSessionInfo:
     agent_identity: str
     room_name: str
     max_duration_seconds: int
-    billing_mode: str
     livekit_url: str | None = None
     agent_token: str | None = field(default=None, repr=False)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -292,7 +291,6 @@ class AtmeeAPI:
             agent_identity=str(data.get("agentIdentity", "")),
             room_name=str(data.get("roomName", "")),
             max_duration_seconds=int(data.get("maxDurationSeconds") or 0),
-            billing_mode=str(data.get("billingMode", "")),
             livekit_url=_str_or_none(data.get("livekitUrl")),
             agent_token=_str_or_none(data.get("agentToken")),
             raw={k: v for k, v in data.items() if k != "agentToken"},

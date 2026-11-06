@@ -203,7 +203,7 @@ class AtmeeDailyVideoService(AtmeeVideoService):
         await self._end_if_closing()
         logger.info(
             f"{self}: Atmee avatar session {self.session_id} started in {room_url} "
-            f"(billing {info.billing_mode}, ceiling {info.max_duration_seconds}s)"
+            f"(ceiling {info.max_duration_seconds}s)"
         )
         self._hello_task = self.create_task(self._hello_loop(), "atmee_daily_hello")
 

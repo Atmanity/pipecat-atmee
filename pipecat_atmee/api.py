@@ -14,9 +14,8 @@
 
 """Thin async client for the Atmee API.
 
-Two resources matter here: **avatars** (create a v1 avatar from a portrait,
-read an avatar's status) and **avatar sessions** (render a v1 or v2 avatar
-for your bot, end it).
+Two resources matter here: **avatars** (read an avatar's status) and
+**avatar sessions** (render a v1 or v2 avatar for your bot, end it).
 Authentication is your Atmee API key (``sk_atmee_...``) in the ``X-Api-Key``
 header; keep it on your bot's side, it never belongs in a browser.
 """
@@ -24,10 +23,8 @@ header; keep it on your bot's side, it never belongs in a browser.
 from __future__ import annotations
 
 import asyncio
-import mimetypes
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -160,14 +157,6 @@ class AvatarInfo:
     def ready(self) -> bool:
         """Whether the avatar can be rendered."""
         return self.status == "ready"
-
-
-_IMAGE_TYPES = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-}
 
 
 class AtmeeAPI:
@@ -320,59 +309,6 @@ class AtmeeAPI:
 
     # --- avatars -----------------------------------------------------------
 
-    async def create_avatar(
-        self,
-        name: str,
-        image: str | Path | bytes,
-        *,
-        description: str | None = None,
-        content_type: str | None = None,
-    ) -> str:
-        """Create a render-only **v1 avatar** from a single portrait and return its id.
-
-        ``image`` is a local file path, the image bytes, or an ``https://``
-        URL Atmee can download (``.jpg``, ``.png``, ``.webp``). A
-        portrait-only avatar is ready at once; nothing to poll.
-        """
-        info = await self.create_avatar_info(
-            name, image, description=description, content_type=content_type
-        )
-        return info.avatar_id
-
-    async def create_avatar_info(
-        self,
-        name: str,
-        image: str | Path | bytes,
-        *,
-        description: str | None = None,
-        content_type: str | None = None,
-    ) -> AvatarInfo:
-        """Like :meth:`create_avatar`, returning the whole response."""
-        if isinstance(image, str) and _is_url(image):
-            manifest: dict[str, Any] = {
-                "schemaVersion": 1,
-                "name": name,
-                "assets": {"image": {"url": image}},
-            }
-            if description:
-                manifest["description"] = description
-            data = await self._request("POST", "/v1/avatars", json=manifest, retry=False)
-            return _avatar_info(data)
-
-        if isinstance(image, bytes | bytearray):
-            blob = bytes(image)
-            filename = "portrait" + _extension_for(content_type) if content_type else "portrait.jpg"
-            ctype = content_type or "image/jpeg"
-        else:
-            blob, filename, ctype = await asyncio.to_thread(_load_image_file, image, content_type)
-        form = aiohttp.FormData()
-        form.add_field("name", name)
-        if description:
-            form.add_field("description", description)
-        form.add_field("file", blob, filename=filename, content_type=ctype)
-        data = await self._request("POST", "/v1/avatars", data=form, retry=False)
-        return _avatar_info(data)
-
     async def get_avatar(self, avatar_id: str) -> AvatarInfo:
         """Read an avatar."""
         return _avatar_info(await self._request("GET", f"/v1/avatars/{avatar_id}"))
@@ -408,7 +344,6 @@ class AtmeeAPI:
         path: str,
         *,
         json: dict[str, Any] | None = None,
-        data: aiohttp.FormData | None = None,
         params: dict[str, str] | None = None,
         retry: bool = True,
         total_timeout: float = _DEFAULT_TOTAL_TIMEOUT,
@@ -440,7 +375,6 @@ class AtmeeAPI:
                     f"{self._api_url}{path}",
                     headers={"X-Api-Key": self._api_key, "Accept": "application/json"},
                     json=json,
-                    data=data,
                     params=params,
                     timeout=aiohttp.ClientTimeout(
                         sock_connect=self._conn_options.timeout, total=attempt_timeout
@@ -552,25 +486,3 @@ def _avatar_info(data: dict[str, Any]) -> AvatarInfo:
         name=data.get("name"),
         raw=data,
     )
-
-
-def _is_url(value: str) -> bool:
-    return value.startswith(("http://", "https://"))
-
-
-def _load_image_file(image: str | Path, content_type: str | None) -> tuple[bytes, str, str]:
-    path = Path(image)
-    ctype = (
-        content_type
-        or _IMAGE_TYPES.get(path.suffix.lower())
-        or mimetypes.guess_type(path.name)[0]
-        or "application/octet-stream"
-    )
-    return path.read_bytes(), path.name, ctype
-
-
-def _extension_for(content_type: str) -> str:
-    for ext, ctype in _IMAGE_TYPES.items():
-        if ctype == content_type and ext != ".jpeg":
-            return ext
-    return mimetypes.guess_extension(content_type) or ""

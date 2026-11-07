@@ -35,24 +35,13 @@ Python 3.11+, `pipecat-ai` 1.8 or newer.
 - An **Atmee API key** (`sk_atmee_...`) in `ATMEE_API_KEY`. Create one in the
   Atmee studio at [atmee.ai/studio/api-keys](https://www.atmee.ai/studio/api-keys).
   Keep it on your bot's side; it never belongs in a browser.
-- An **avatar id**. Any avatar of your account works, v1 or v2:
+- An **avatar id**. Any avatar of your account works, v1 or v2. This package
+  renders avatars; it doesn't create them. Create one in the
+  [Atmee studio](https://www.atmee.ai/docs/studio/create-an-avatar) or with the
+  [Atmee API](https://www.atmee.ai/docs/api/create-avatar), and copy its id.
 
-  - **v1 avatars** are talking heads generated from a single portrait. Create
-    one through the API, once:
-
-    ```python
-    from pipecat_atmee import AtmeeAPI
-
-    async with AtmeeAPI() as api:                  # reads ATMEE_API_KEY
-        avatar_id = await api.create_avatar(name="Val", image="portrait.jpg")
-    ```
-
-    `image` may be a local file path, raw bytes, or an `https://` URL
-    (`.jpg`, `.png`, `.webp`). A portrait-only avatar is ready immediately.
-    Avatars you made in the [Atmee studio](https://atmee.ai) work too.
-  - **v2 avatars** are Atmee's newer avatars. They can't be created from a
-    portrait through the API yet; [contact Atmee](https://atmee.ai) to get
-    one set up for your account, then use its id like any other. A v2 avatar
+  - **v1 avatars** are talking heads generated from a single portrait.
+  - **v2 avatars** are Atmee's newer avatars, which move as a whole. A v2 avatar
     on a cold rendering machine can take a few minutes to start; the
     service waits for it (see `avatar_warmup_timeout` and
     `avatar_join_timeout`).
@@ -191,8 +180,7 @@ the start while a v2 avatar is warming up.
 
 ```bash
 git clone https://github.com/Atmanity/pipecat-atmee && cd pipecat-atmee
-cp examples/.env.example .env           # fill in the keys
-uv run examples/create_avatar.py --name Val --image portrait.jpg   # once; put the id in .env
+cp examples/.env.example .env           # fill in the keys and an avatar id
 uv run examples/bot.py                  # then open http://localhost:7860 and click Connect
 ```
 

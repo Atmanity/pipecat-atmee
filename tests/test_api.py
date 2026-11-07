@@ -135,24 +135,6 @@ async def test_retries_are_bounded(fake_api):
     assert len(fake_api.calls(path)) == FAST.max_retry + 1
 
 
-async def test_create_avatar_from_url(fake_api):
-    fake_api.respond("/v1/avatars", (201, {"avatarId": "a-1", "status": "ready"}))
-    async with api(fake_api) as client:
-        assert await client.create_avatar("Val", "https://example.com/val.jpg") == "a-1"
-    assert fake_api.calls("/v1/avatars")[0] == {
-        "schemaVersion": 1,
-        "name": "Val",
-        "assets": {"image": {"url": "https://example.com/val.jpg"}},
-    }
-
-
-async def test_create_avatar_from_bytes(fake_api):
-    fake_api.respond("/v1/avatars", (201, {"avatarId": "a-2", "status": "ready"}))
-    async with api(fake_api) as client:
-        info = await client.create_avatar_info("Val", b"\xff\xd8jpeg", content_type="image/jpeg")
-    assert info.ready and info.avatar_id == "a-2"
-
-
 def test_requires_key(monkeypatch):
     monkeypatch.delenv("ATMEE_API_KEY", raising=False)
     with pytest.raises(AtmeeException, match="ATMEE_API_KEY"):

@@ -19,5 +19,5 @@ All notable changes to this project are documented here. The format follows
   default `avatar_join_timeout` (330 s) covers a cold start.
 - `AtmeeDailyVideoService` (extra `daily`): on `DailyTransport` the avatar joins
   the bot's Daily room as its own participant and publishes there directly.
-- `AtmeeAPI`: create v1 avatars from a portrait, start, read and end avatar sessions.
-- Examples: `examples/bot.py` (SmallWebRTC / Daily / LiveKit), `examples/create_avatar.py`.
+- `AtmeeAPI`: read avatars; start, read and end avatar sessions.
+- Examples: `examples/bot.py` (SmallWebRTC / Daily / LiveKit).

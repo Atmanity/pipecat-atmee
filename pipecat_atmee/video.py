@@ -160,7 +160,7 @@ class AtmeeVideoService(AIService):
         """Initialize the Atmee video service.
 
         Args:
-            avatar_id: The Atmee avatar to render (see ``AtmeeAPI.create_avatar``).
+            avatar_id: The Atmee avatar to render (made in the Atmee studio or API).
             api_key: Your ``sk_atmee_...`` key; defaults to ``ATMEE_API_KEY``.
             api_url: API base; defaults to ``ATMEE_API_URL`` or the Atmee cloud.
             session: An aiohttp session to reuse for API calls.

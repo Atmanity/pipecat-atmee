@@ -15,7 +15,7 @@
 """Atmee avatars for Pipecat: give your bot a face.
 
 ``AtmeeVideoService`` renders an Atmee avatar (v1 or v2) lip-synced to your
-bot's TTS, and ``AtmeeAPI`` creates v1 avatars from a single portrait.
+bot's TTS. Create avatars in the Atmee studio or with the Atmee API.
 """
 
 from pipecat_atmee.api import (
